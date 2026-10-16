@@ -1,0 +1,117 @@
+# ==============================================================================
+# 1. DEPLOYMENT MOTOR IA OLLAMA (ALTA DISPONIBILIDAD + 16 CORES + HOSTPATH)
+# ==============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: motor-ia-ollama
+  namespace: default
+  labels:
+    app: motor-ia-ollama
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: motor-ia-ollama
+  template:
+    metadata:
+      labels:
+        app: motor-ia-ollama
+    spec:
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: In
+                values:
+                - worker-node
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - motor-ia-ollama
+              topologyKey: kubernetes.io/hostname
+      containers:
+      - name: ollama
+        image: ollama/ollama:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 11434
+        resources:
+          requests:
+            cpu: "4"
+          limits:
+            cpu: "14"
+        volumeMounts:
+        - name: ollama-storage
+          mountPath: /root/.ollama
+      volumes:
+      - name: ollama-storage
+        hostPath:
+          path: /opt/ollama-data
+          type: DirectoryOrCreate
+---
+# ==============================================================================
+# 2. SERVICIO INTERNO CLUSTER-IP PARA OLLAMA
+# ==============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: ollama-service
+  namespace: default
+spec:
+  selector:
+    app: motor-ia-ollama
+  ports:
+  - protocol: TCP
+    port: 11434
+    targetPort: 11434
+  type: ClusterIP
+---
+# ==============================================================================
+# 3. AUTOESCALADOR HORIZONTAL DE PODS (HPA - UMBRAL 80% CPU)
+# ==============================================================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: motor-ia-ollama-hpa
+  namespace: default
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: motor-ia-ollama
+  minReplicas: 1
+  maxReplicas: 2
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 80
+---
+# ==============================================================================
+# 4. MONITOREO Y TELEMETRÍA (GRAFANA PERSISTENTE + NODE EXPORTER)
+# ==============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana-service
+  namespace: monitoreo
+spec:
+  type: NodePort
+  selector:
+    app: grafana
+  ports:
+  - port: 3000
+    targetPort: 3000
+    nodePort: 31250
